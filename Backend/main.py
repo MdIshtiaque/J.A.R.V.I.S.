@@ -1,3 +1,4 @@
+import asyncio
 import time
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health")
 async def health_check():
     return {
@@ -28,6 +30,60 @@ async def health_check():
         "voice": DEFAULT_TTS_VOICE,
         "timestamp": time.time()
     }
+
+
+async def _run_llm_with_progress(websocket: WebSocket, prompt: str) -> str:
+    """Run LLM in a worker thread while streaming spoken progress to the client."""
+    loop = asyncio.get_running_loop()
+    status_queue: asyncio.Queue = asyncio.Queue()
+
+    def on_status(status: str, detail: str = None, speak: bool = False):
+        loop.call_soon_threadsafe(
+            status_queue.put_nowait,
+            {"status": status, "detail": detail, "speak": speak},
+        )
+
+    async def drain_status():
+        while True:
+            event = await status_queue.get()
+            if event is None:
+                break
+
+            payload = {"type": "status", "status": event["status"]}
+            if event.get("detail"):
+                payload["detail"] = event["detail"]
+            await websocket.send_text(json.dumps(payload))
+
+            if event.get("detail"):
+                await websocket.send_text(json.dumps({
+                    "type": "progress",
+                    "text": event["detail"],
+                    "speak": bool(event.get("speak")),
+                }))
+
+                # Speak progress lines out loud (On it… / Found it…)
+                if event.get("speak"):
+                    await websocket.send_text(json.dumps({
+                        "type": "status",
+                        "status": "speaking",
+                    }))
+                    tts_bytes = await tts_service.generate_speech_bytes(event["detail"])
+                    if tts_bytes:
+                        await websocket.send_bytes(tts_bytes)
+                    # Return to working/searching status after short spoken beat
+                    await websocket.send_text(json.dumps({
+                        "type": "status",
+                        "status": event["status"],
+                    }))
+
+    drain_task = asyncio.create_task(drain_status())
+    try:
+        reply = await asyncio.to_thread(llm_service.generate_response, prompt, on_status)
+        return reply
+    finally:
+        await status_queue.put(None)
+        await drain_task
+
 
 async def handle_websocket_connection(websocket: WebSocket):
     await websocket.accept()
@@ -56,7 +112,7 @@ async def handle_websocket_connection(websocket: WebSocket):
                         print(f"⌨️ Text command: \"{prompt}\"")
 
                         await websocket.send_text(json.dumps({"type": "status", "status": "thinking"}))
-                        reply = llm_service.generate_response(prompt)
+                        reply = await _run_llm_with_progress(websocket, prompt)
                         await websocket.send_text(json.dumps({"type": "reply", "text": reply}))
 
                         await websocket.send_text(json.dumps({"type": "status", "status": "speaking"}))
@@ -81,7 +137,9 @@ async def handle_websocket_connection(websocket: WebSocket):
 
                 # 1. Speech-to-Text
                 await websocket.send_text(json.dumps({"type": "status", "status": "transcribing"}))
-                transcript = stt_service.transcribe_audio_bytes(audio_bytes)
+                transcript = await asyncio.to_thread(
+                    stt_service.transcribe_audio_bytes, audio_bytes
+                )
 
                 if not transcript:
                     await websocket.send_text(json.dumps({"type": "status", "status": "idle"}))
@@ -89,15 +147,14 @@ async def handle_websocket_connection(websocket: WebSocket):
 
                 await websocket.send_text(json.dumps({"type": "transcript", "text": transcript}))
 
-                # 2. LLM Response
+                # 2. LLM Response (with live searching/working progress)
                 await websocket.send_text(json.dumps({"type": "status", "status": "thinking"}))
-                reply = llm_service.generate_response(transcript)
+                reply = await _run_llm_with_progress(websocket, transcript)
                 await websocket.send_text(json.dumps({"type": "reply", "text": reply}))
 
                 # 3. British Neural Speech Generation
                 await websocket.send_text(json.dumps({"type": "status", "status": "speaking"}))
                 tts_bytes = await tts_service.generate_speech_bytes(reply)
-
                 if tts_bytes:
                     await websocket.send_bytes(tts_bytes)
 
@@ -109,13 +166,16 @@ async def handle_websocket_connection(websocket: WebSocket):
     except Exception as e:
         print(f"❌ WebSocket session exception: {e}")
 
+
 @app.websocket("/ws")
 async def websocket_endpoint_ws(websocket: WebSocket):
     await handle_websocket_connection(websocket)
 
+
 @app.websocket("/")
 async def websocket_endpoint_root(websocket: WebSocket):
     await handle_websocket_connection(websocket)
+
 
 if __name__ == "__main__":
     import uvicorn

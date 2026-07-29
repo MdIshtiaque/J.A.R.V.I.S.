@@ -40,6 +40,51 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
 
   // Active audio element ref for playback
   const currentAudioRef = useRef(null);
+  const audioQueueRef = useRef([]);
+  const isPlayingQueueRef = useRef(false);
+  const onAiSpeakingChangeRef = useRef(onAiSpeakingChange);
+  useEffect(() => { onAiSpeakingChangeRef.current = onAiSpeakingChange; }, [onAiSpeakingChange]);
+
+  const playNextInQueue = useCallback(async () => {
+    if (isPlayingQueueRef.current) return;
+    const next = audioQueueRef.current.shift();
+    if (!next) {
+      if (onAiSpeakingChangeRef.current) onAiSpeakingChangeRef.current(false);
+      return;
+    }
+
+    isPlayingQueueRef.current = true;
+    try {
+      const audioBlob = new Blob([next], { type: next.type || 'audio/wav' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+      if (onAiSpeakingChangeRef.current) onAiSpeakingChangeRef.current(true);
+
+      await new Promise((resolve) => {
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
+          resolve();
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
+          resolve();
+        };
+        audio.play().catch(() => resolve());
+      });
+    } finally {
+      isPlayingQueueRef.current = false;
+      // Continue with any queued progress / final reply audio
+      playNextInQueue();
+    }
+  }, []);
+
+  const enqueueAudio = useCallback((blob) => {
+    audioQueueRef.current.push(blob);
+    playNextInQueue();
+  }, [playNextInQueue]);
 
   // Notify parent
   useEffect(() => { if (onMicStatusChange) onMicStatusChange(micStatus); }, [micStatus, onMicStatusChange]);
@@ -59,42 +104,10 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       };
 
       ws.onmessage = async (event) => {
-        // Binary = British Neural / ONNX J.A.R.V.I.S. TTS Audio from Python Backend
+        // Binary = spoken progress or final reply audio (queued in order)
         if (event.data instanceof Blob) {
-          console.log('[WS] 🔊 Received J.A.R.V.I.S. voice audio:', event.data.size, 'bytes');
-          try {
-            if (currentAudioRef.current) {
-              currentAudioRef.current.pause();
-              currentAudioRef.current = null;
-            }
-
-            const audioBlob = new Blob([event.data], { type: event.data.type || 'audio/wav' });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            currentAudioRef.current = audio;
-
-            if (onAiSpeakingChange) onAiSpeakingChange(true);
-
-            audio.onended = () => {
-              console.log('[WS] 🔊 Voice playback completed');
-              if (onAiSpeakingChange) onAiSpeakingChange(false);
-              URL.revokeObjectURL(audioUrl);
-              currentAudioRef.current = null;
-            };
-
-            audio.onerror = (e) => {
-              console.error('[WS] ❌ Audio playback error:', e);
-              if (onAiSpeakingChange) onAiSpeakingChange(false);
-              URL.revokeObjectURL(audioUrl);
-              currentAudioRef.current = null;
-            };
-
-            await audio.play();
-            console.log('[WS] 🔊 Playing J.A.R.V.I.S. voice out loud!');
-          } catch (e) {
-            console.warn('[WS] Audio play failed:', e);
-            if (onAiSpeakingChange) onAiSpeakingChange(false);
-          }
+          console.log('[WS] 🔊 Queued J.A.R.V.I.S. voice audio:', event.data.size, 'bytes');
+          enqueueAudio(event.data);
           return;
         }
 
@@ -112,7 +125,12 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
               setPipelineStatus(msg.status);
               if (msg.status === 'transcribing') {
                 // If not already showing interim text
-              } else if (msg.status === 'thinking') {
+              } else if (
+                msg.status === 'thinking' ||
+                msg.status === 'searching' ||
+                msg.status === 'working' ||
+                msg.status === 'found'
+              ) {
                 setIsThinking(true);
                 setInterimText('');
               } else if (msg.status === 'speaking') {
@@ -123,6 +141,18 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
                 setInterimText('');
                 setPipelineStatus('idle');
               }
+              break;
+
+            case 'progress':
+              // Keep each spoken milestone visible (On it… → Found it…)
+              setIsThinking(true);
+              setMessages(prev => [...prev, {
+                id: `progress-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                sender: 'JARVIS',
+                text: msg.text,
+                kind: 'progress',
+                timestamp: timeStr,
+              }]);
               break;
 
             case 'transcript':
@@ -180,7 +210,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       console.error('[WS] Connection failed:', e);
       setBackendStatus('error');
     }
-  }, [onAiSpeakingChange]);
+  }, [enqueueAudio]);
 
   useEffect(() => {
     connectWebSocket();
@@ -484,6 +514,9 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
   const micLabel = (() => {
     if (micStatus === 'active') {
       if (pipelineStatus === 'transcribing') return 'TRANSCRIBING';
+      if (pipelineStatus === 'searching') return 'SEARCHING WEB';
+      if (pipelineStatus === 'found') return 'FOUND RESULTS';
+      if (pipelineStatus === 'working') return 'WORKING';
       if (pipelineStatus === 'thinking') return 'THINKING';
       if (pipelineStatus === 'speaking') return 'J.A.R.V.I.S. SPEAKING';
       return 'LISTENING LIVE';
@@ -589,7 +622,15 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
                 {isThinking && (
                   <div className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-cyan-400/50 text-cyan-300 animate-pulse">
                     <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                    <span className="text-[11px] font-bold">JARVIS is thinking...</span>
+                    <span className="text-[11px] font-bold">
+                      {pipelineStatus === 'searching'
+                        ? 'JARVIS is searching the web...'
+                        : pipelineStatus === 'found'
+                          ? 'JARVIS found results...'
+                          : pipelineStatus === 'working'
+                            ? 'JARVIS is working on it...'
+                            : 'JARVIS is thinking...'}
+                    </span>
                   </div>
                 )}
               </div>
