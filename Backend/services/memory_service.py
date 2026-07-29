@@ -36,16 +36,40 @@ class MemoryService:
         except Exception as e:
             print(f"❌ Memory save error: {e}")
 
+    # Map common aliases so identity facts stay consistent
+    KEY_ALIASES = {
+        "name": "user_name",
+        "my_name": "user_name",
+        "real_name": "user_name",
+        "full_name": "user_name",
+        "title": "call_me",
+        "address_as": "call_me",
+        "form_of_address": "call_me",
+        "how_to_address": "call_me",
+        "preferred_title": "call_me",
+    }
+
+    DISPLAY_KEYS = {
+        "user_name": "user_name (real name)",
+        "call_me": "call_me (how to address in speech)",
+    }
+
     def remember(self, key: str, value: Any) -> str:
         """Store or update a learned fact/preference"""
+        if not key or not str(key).strip():
+            return "Ignored empty memory key."
+
         clean_key = key.strip().lower().replace(" ", "_")
+        clean_key = self.KEY_ALIASES.get(clean_key, clean_key)
+        display_key = self.DISPLAY_KEYS.get(clean_key, clean_key)
+
         self.memory[clean_key] = {
-            "key": key.strip(),
+            "key": display_key,
             "value": value,
             "timestamp": os.path.getmtime(self.storage_path) if self.storage_path.exists() else 0
         }
         self._save_memory()
-        return f"Fact stored: '{key}' = '{value}'"
+        return f"Fact stored: '{display_key}' = '{value}'"
 
     def forget(self, key: str) -> str:
         """Remove a stored fact"""
@@ -72,7 +96,10 @@ class MemoryService:
         context_str = (
             "\n\n[RECALLED LEARNED KNOWLEDGE & USER PREFERENCES]:\n"
             + "\n".join(facts)
-            + "\nUse this learned knowledge naturally to personalize your answers."
+            + "\nIDENTITY: If user_name and call_me both exist, user_name is their real name; "
+            "call_me is only how you address them. When asked their name, answer user_name. "
+            "In speech, address them as call_me."
+            "\nUse this learned knowledge naturally to personalize your answers."
         )
         return context_str
 

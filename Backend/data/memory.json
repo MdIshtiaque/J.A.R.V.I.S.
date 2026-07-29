@@ -1,8 +1,28 @@
 {
   "user_name": {
-    "key": "user_name",
+    "key": "user_name (real name)",
+    "value": "Emon",
+    "timestamp": 1785354993.2352173
+  },
+  "call_me": {
+    "key": "call_me (how to address in speech)",
     "value": "Sir",
-    "timestamp": 1785353260.0
+    "timestamp": 1785355133.0805345
+  },
+  "favorite_language": {
+    "key": "favorite_language",
+    "value": "Python",
+    "timestamp": 1785354796.3289907
+  },
+  "favorite_color": {
+    "key": "favorite_color",
+    "value": "blue",
+    "timestamp": 1785354458.8554125
+  },
+  "favorite_drink": {
+    "key": "favorite_drink",
+    "value": "coffee",
+    "timestamp": 1785355028.0636792
   },
   "celsius_to_fahrenheit_formula": {
     "key": "celsius_to_fahrenheit_formula",
