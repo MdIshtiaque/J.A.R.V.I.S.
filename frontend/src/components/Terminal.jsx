@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal as TerminalIcon, Sparkles, Trash2, Mic, MicOff, Send, ChevronDown, ChevronUp, Loader2, Radio } from 'lucide-react';
 
-const WS_URL = 'ws://localhost:3001';
+const WS_URL = 'ws://localhost:3001/ws';
 
 export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, onListeningChange }) => {
   const [messages, setMessages] = useState([
@@ -25,6 +25,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
   const wsRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
+  const recognitionRef = useRef(null);
   const scrollRef = useRef(null);
   const isMicActiveRef = useRef(false);
   const audioChunksRef = useRef([]);
@@ -58,9 +59,9 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       };
 
       ws.onmessage = async (event) => {
-        // Binary = British Neural TTS Audio from Python Backend
+        // Binary = British Neural / ONNX J.A.R.V.I.S. TTS Audio from Python Backend
         if (event.data instanceof Blob) {
-          console.log('[WS] 🔊 Received British Neural TTS audio:', event.data.size, 'bytes');
+          console.log('[WS] 🔊 Received J.A.R.V.I.S. voice audio:', event.data.size, 'bytes');
           try {
             if (currentAudioRef.current) {
               currentAudioRef.current.pause();
@@ -75,7 +76,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
             if (onAiSpeakingChange) onAiSpeakingChange(true);
 
             audio.onended = () => {
-              console.log('[WS] 🔊 British TTS playback completed');
+              console.log('[WS] 🔊 Voice playback completed');
               if (onAiSpeakingChange) onAiSpeakingChange(false);
               URL.revokeObjectURL(audioUrl);
               currentAudioRef.current = null;
@@ -89,7 +90,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
             };
 
             await audio.play();
-            console.log('[WS] 🔊 Playing British J.A.R.V.I.S. voice out loud!');
+            console.log('[WS] 🔊 Playing J.A.R.V.I.S. voice out loud!');
           } catch (e) {
             console.warn('[WS] Audio play failed:', e);
             if (onAiSpeakingChange) onAiSpeakingChange(false);
@@ -110,7 +111,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
             case 'status':
               setPipelineStatus(msg.status);
               if (msg.status === 'transcribing') {
-                setInterimText('Transcribing speech...');
+                // If not already showing interim text
               } else if (msg.status === 'thinking') {
                 setIsThinking(true);
                 setInterimText('');
@@ -126,12 +127,17 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
 
             case 'transcript':
               setInterimText('');
-              setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                sender: 'USER',
-                text: msg.text,
-                timestamp: timeStr,
-              }]);
+              setMessages(prev => {
+                // Avoid duplicating transcript if real-time engine already pushed it
+                const last = prev[prev.length - 1];
+                if (last && last.sender === 'USER' && last.text === msg.text) return prev;
+                return [...prev, {
+                  id: Date.now().toString(),
+                  sender: 'USER',
+                  text: msg.text,
+                  timestamp: timeStr,
+                }];
+              });
               break;
 
             case 'reply':
@@ -202,7 +208,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
           audioChunksRef.current = [];
 
           if (completeBlob.size > 2000) {
-            console.log('[MIC] 📤 Sending audio segment:', (completeBlob.size / 1024).toFixed(1), 'KB');
+            console.log('[MIC] 📤 Sending audio segment to Python backend:', (completeBlob.size / 1024).toFixed(1), 'KB');
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               wsRef.current.send(completeBlob);
             }
@@ -219,7 +225,6 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
     }
   }, []);
 
-  // ─── Stop current MediaRecorder segment & send ───
   const stopRecordingSegment = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -227,6 +232,61 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       } catch (e) {
         console.warn('[MIC] Error stopping segment:', e);
       }
+    }
+  }, []);
+
+  // ─── Real-Time Client-Side STT Recognition Stream ───
+  const startRealtimeSTT = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+
+      rec.onresult = (event) => {
+        let liveInterim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            console.log('[STT] 🎯 Real-time final transcript:', transcript.trim());
+          } else {
+            liveInterim += transcript;
+          }
+        }
+        if (liveInterim.trim()) {
+          setInterimText(liveInterim.trim());
+        }
+      };
+
+      rec.onerror = (e) => {
+        console.warn('[STT] Real-time STT notice:', e.error);
+      };
+
+      rec.onend = () => {
+        if (isMicActiveRef.current) {
+          try { rec.start(); } catch {}
+        }
+      };
+
+      rec.start();
+      recognitionRef.current = rec;
+      console.log('[STT] ⚡ Real-time instant STT stream active');
+    } catch (e) {
+      console.warn('[STT] Real-time STT init failed:', e);
+    }
+  }, []);
+
+  const stopRealtimeSTT = useCallback(() => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
     }
   }, []);
 
@@ -250,7 +310,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const SPEECH_THRESHOLD = 14;
-      const SILENCE_MS = 1200;
+      const SILENCE_MS = 1000; // Fast 1000ms silence detection for snappy response
 
       const checkVAD = () => {
         if (!isMicActiveRef.current) return;
@@ -266,7 +326,6 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
         if (avgEnergy > SPEECH_THRESHOLD) {
           if (!isSpeakingRef.current) {
             isSpeakingRef.current = true;
-            setInterimText('Listening to your voice...');
             console.log('[VAD] 🗣️ Speech started');
             startRecordingSegment();
           }
@@ -280,7 +339,6 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
             silenceTimerRef.current = setTimeout(() => {
               console.log('[VAD] 🔇 Silence detected — finalizing segment');
               isSpeakingRef.current = false;
-              setInterimText('');
               stopRecordingSegment();
               silenceTimerRef.current = null;
             }, SILENCE_MS);
@@ -336,7 +394,8 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       setErrorMessage('');
 
       startVAD(stream);
-      console.log('[MIC] ✅ Microphone activated');
+      startRealtimeSTT();
+      console.log('[MIC] ✅ Microphone activated with real-time streaming');
     } catch (e) {
       console.error('[MIC] ❌ Mic activation failed:', e);
       setErrorMessage('Microphone access denied. Allow mic access and retry.');
@@ -344,11 +403,12 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       setIsListening(false);
       isMicActiveRef.current = false;
     }
-  }, [startVAD]);
+  }, [startVAD, startRealtimeSTT]);
 
   const stopMic = useCallback(() => {
     isMicActiveRef.current = false;
     stopVAD();
+    stopRealtimeSTT();
     stopRecordingSegment();
 
     if (mediaStreamRef.current) {
@@ -360,7 +420,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
     setIsListening(false);
     setInterimText('');
     console.log('[MIC] 🔴 Microphone deactivated');
-  }, [stopVAD, stopRecordingSegment]);
+  }, [stopVAD, stopRealtimeSTT, stopRecordingSegment]);
 
   const toggleMic = useCallback(() => {
     if (isMicActiveRef.current) {
@@ -375,12 +435,13 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
     return () => {
       isMicActiveRef.current = false;
       stopVAD();
+      stopRealtimeSTT();
       stopRecordingSegment();
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
       }
     };
-  }, [stopVAD, stopRecordingSegment]);
+  }, [stopVAD, stopRealtimeSTT, stopRecordingSegment]);
 
   // Auto-scroll
   useEffect(() => {
@@ -425,7 +486,7 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
       if (pipelineStatus === 'transcribing') return 'TRANSCRIBING';
       if (pipelineStatus === 'thinking') return 'THINKING';
       if (pipelineStatus === 'speaking') return 'J.A.R.V.I.S. SPEAKING';
-      return 'LISTENING';
+      return 'LISTENING LIVE';
     }
     if (micStatus === 'requesting') return 'REQUESTING...';
     if (micStatus === 'error') return 'MIC ERROR';
@@ -513,12 +574,15 @@ export const Terminal = ({ blobConfig, onAiSpeakingChange, onMicStatusChange, on
                   </div>
                 ))}
 
+                {/* Real-time live streaming text as user speaks */}
                 {interimText && (
                   <div className="flex items-center gap-2 p-2 rounded-xl bg-cyan-950/50 border border-cyan-400/60 text-cyan-200 animate-pulse shadow-[0_0_20px_rgba(0,240,255,0.2)]">
                     <span className="text-cyan-400 font-bold shrink-0 flex items-center gap-1 text-[10px]">
                       <Radio className="w-3 h-3 text-cyan-400 animate-spin" />
+                      SPEAKING &gt;
                     </span>
                     <span className="italic text-cyan-300 font-bold text-[11px]">{interimText}</span>
+                    <span className="w-1.5 h-3 bg-cyan-400 animate-pulse ml-auto"></span>
                   </div>
                 )}
 
