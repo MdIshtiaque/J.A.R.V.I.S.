@@ -1,0 +1,20 @@
+{
+  "name": "jarvis-backend",
+  "version": "1.0.0",
+  "description": "J.A.R.V.I.S. Backend — Groq Whisper STT + LLM + Edge Neural TTS",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@travisvn/edge-tts": "^1.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "google-tts-api": "^2.0.2",
+    "groq-sdk": "^0.18.0",
+    "ws": "^8.18.0"
+  }
+}

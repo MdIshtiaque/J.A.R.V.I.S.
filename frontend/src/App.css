@@ -1,0 +1,9 @@
+.App {
+  min-height: 100vh;
+  background-image: linear-gradient(rgba(11, 15, 25, 0.75), rgba(11, 15, 25, 0.85)), url('./Images/backgroundImage.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  color: white;
+}

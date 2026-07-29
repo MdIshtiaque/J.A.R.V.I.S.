@@ -1,0 +1,6 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+groq==0.18.0
+edge-tts==6.1.16
+python-dotenv==1.0.1
+websockets==14.1
