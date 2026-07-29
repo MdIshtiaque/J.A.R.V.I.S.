@@ -1,0 +1,7 @@
+{
+  "system_actions": {
+    "name": "system_actions",
+    "description": "Open websites (YouTube, Google, Facebook, Instagram, etc) or inspect system disk storage and RAM",
+    "file_path": "/home/emon/Desktop/J.A.R.V.I.S./Backend/skills/system_actions.py"
+  }
+}
