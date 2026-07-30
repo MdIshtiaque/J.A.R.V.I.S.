@@ -63,6 +63,30 @@ export const Nabbar = ({ activeTab = 'overview', onTabChange, blobConfig, setBlo
     }));
   };
 
+  const handleSpeedChange = (e) => {
+    const speed = parseFloat(e.target.value);
+    setBlobConfig((prev) => ({
+      ...prev,
+      speed,
+    }));
+  };
+
+  const handleSpikesChange = (e) => {
+    const spikes = parseFloat(e.target.value);
+    setBlobConfig((prev) => ({
+      ...prev,
+      spikes,
+    }));
+  };
+
+  const handleProcessingChange = (e) => {
+    const processing = parseFloat(e.target.value);
+    setBlobConfig((prev) => ({
+      ...prev,
+      processing,
+    }));
+  };
+
   const toggleDragMode = () => {
     setBlobConfig((prev) => ({
       ...prev,
@@ -281,7 +305,7 @@ export const Nabbar = ({ activeTab = 'overview', onTabChange, blobConfig, setBlo
                     step="0.1"
                     value={blobConfig?.scale || 1.0}
                     onChange={handleScaleChange}
-                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                    className="jarvis-range w-full"
                   />
                 </div>
 
@@ -303,7 +327,7 @@ export const Nabbar = ({ activeTab = 'overview', onTabChange, blobConfig, setBlo
                     step="0.5"
                     value={blobConfig?.sensitivity !== undefined ? blobConfig.sensitivity : 5.5}
                     onChange={handleSensitivityChange}
-                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                    className="jarvis-range w-full"
                   />
                   <div className="flex justify-between text-[10px] text-slate-500 mt-1">
                     <span>1.0 (Low)</span>
@@ -312,12 +336,78 @@ export const Nabbar = ({ activeTab = 'overview', onTabChange, blobConfig, setBlo
                   </div>
                 </div>
 
-                {/* 4. DRAG & DROP POSITION OPTION */}
+                {/* 4. SPEED OPTION */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="flex items-center space-x-2 text-slate-300 font-semibold">
+                      <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>4. BLOB SPEED</span>
+                    </label>
+                    <span className="text-cyan-300 font-bold">
+                      {blobConfig?.speed !== undefined ? blobConfig.speed.toFixed(0) : '13'}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="10"
+                    max="120"
+                    step="1"
+                    value={blobConfig?.speed !== undefined ? blobConfig.speed : 13}
+                    onChange={handleSpeedChange}
+                    className="jarvis-range w-full"
+                  />
+                </div>
+
+                {/* 5. SPIKES OPTION */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="flex items-center space-x-2 text-slate-300 font-semibold">
+                      <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>5. BLOB SPIKES</span>
+                    </label>
+                    <span className="text-cyan-300 font-bold">
+                      {blobConfig?.spikes !== undefined ? blobConfig.spikes.toFixed(2) : '0.60'}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="2"
+                    step="0.05"
+                    value={blobConfig?.spikes !== undefined ? blobConfig.spikes : 0.6}
+                    onChange={handleSpikesChange}
+                    className="jarvis-range w-full"
+                  />
+                </div>
+
+                {/* 6. PROCESSING OPTION */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="flex items-center space-x-2 text-slate-300 font-semibold">
+                      <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>6. BLOB PROCESSING</span>
+                    </label>
+                    <span className="text-cyan-300 font-bold">
+                      {blobConfig?.processing !== undefined ? blobConfig.processing.toFixed(2) : '1.00'}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.6"
+                    max="2.4"
+                    step="0.01"
+                    value={blobConfig?.processing !== undefined ? blobConfig.processing : 1.0}
+                    onChange={handleProcessingChange}
+                    className="jarvis-range w-full"
+                  />
+                </div>
+
+                {/* 7. DRAG & DROP POSITION OPTION */}
                 <div className="pt-2 border-t border-white/10">
                   <label className="flex items-center justify-between text-slate-300 font-semibold mb-2">
                     <span className="flex items-center space-x-2">
                       <Move className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>4. DRAG & DROP POSITION</span>
+                      <span>7. DRAG & DROP POSITION</span>
                     </span>
                     <span className={`text-[10px] px-2 py-0.5 rounded ${
                       blobConfig?.isDragEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'

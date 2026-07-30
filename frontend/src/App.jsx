@@ -11,6 +11,9 @@ const DEFAULT_BLOB_CONFIG = {
   deepColor: '#001433',
   scale: 1.0,
   sensitivity: 5.5,
+  speed: 13,
+  spikes: 0.6,
+  processing: 1.0,
   position: { x: 0, y: 0 },
   isDragEnabled: false,
 };
@@ -23,7 +26,9 @@ function App() {
   const [blobConfig, setBlobConfig] = useState(() => {
     try {
       const saved = localStorage.getItem('jarvis_blob_config');
-      return saved ? JSON.parse(saved) : DEFAULT_BLOB_CONFIG;
+      if (!saved) return DEFAULT_BLOB_CONFIG;
+      const parsed = JSON.parse(saved);
+      return { ...DEFAULT_BLOB_CONFIG, ...parsed };
     } catch {
       return DEFAULT_BLOB_CONFIG;
     }

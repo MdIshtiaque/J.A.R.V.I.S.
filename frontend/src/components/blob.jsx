@@ -84,13 +84,23 @@ const noiseFunctions = `
 const SHELL_VERT = `
   uniform float uTime;
   uniform float uDisplacement;
+  uniform float uNoiseScale;
+  // Motion parameters (match the demo motion equation)
+  uniform float uMotionTime;
+  uniform float uSpikes;
   varying vec3 vNormal;
   varying vec3 vViewPosition;
   ${noiseFunctions}
   void main() {
-    vNormal = normalize(normalMatrix * normal);
-    float noise = fbm(position * 2.2 + vec3(0.0, uTime * 0.4, 0.0));
-    vec3 newPosition = position + normal * (noise * uDisplacement);
+    // Demo-style deformation:
+    // p.normalize(); p.multiplyScalar(1.0 + 0.3 * simplex(p * spikes, time))
+    vec3 p = normalize(position);
+    float baseR = length(position);
+    float n = snoise(vec3(p.x * uSpikes, p.y * uSpikes, p.z * uSpikes + uMotionTime));
+    vec3 newPosition = p * baseR * (1.0 + 0.3 * n);
+
+    // For radial displacement, the deformed normal stays close to p.
+    vNormal = normalize(normalMatrix * p);
     vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
     vViewPosition = -mvPosition.xyz;
     gl_Position = projectionMatrix * mvPosition;
@@ -111,15 +121,21 @@ const SHELL_FRAG = `
 const PLASMA_VERT = `
   uniform float uTime;
   uniform float uDisplacement;
+  uniform float uNoiseScale;
+  uniform float uMotionTime;
+  uniform float uSpikes;
   varying vec3 vPosition;
   varying vec3 vNormal;
   varying vec3 vViewPosition;
   ${noiseFunctions}
   void main() {
-    vPosition = position;
-    vNormal = normalize(normalMatrix * normal);
-    float noise = fbm(position * 2.2 + vec3(0.0, uTime * 0.4, 0.0));
-    vec3 newPosition = position + normal * (noise * uDisplacement);
+    vec3 p = normalize(position);
+    float baseR = length(position);
+    float n = snoise(vec3(p.x * uSpikes, p.y * uSpikes, p.z * uSpikes + uMotionTime));
+    vec3 newPosition = p * baseR * (1.0 + 0.3 * n);
+
+    vPosition = newPosition;
+    vNormal = normalize(normalMatrix * p);
     vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
     vViewPosition = -mvPosition.xyz;
     gl_Position = projectionMatrix * mvPosition;
@@ -193,6 +209,7 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
   const rafRef = useRef(null);
   const sceneStateRef = useRef(null);
   const audioRef = useRef({ ctx: null, analyser: null, data: null, stream: null, source: null });
+  const blobConfigRef = useRef(blobConfig);
   const volumeRef = useRef(0);
   const materialsRef = useRef({ plasmaMat: null, shellFrontMat: null, shellBackMat: null });
   const isAiSpeakingRef = useRef(isAiSpeaking);
@@ -205,6 +222,10 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
   useEffect(() => {
     isMicActiveRef.current = isMicActive;
   }, [isMicActive]);
+
+  useEffect(() => {
+    blobConfigRef.current = blobConfig;
+  }, [blobConfig]);
 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -292,6 +313,9 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
       uniforms: {
         uTime: { value: 0 },
         uDisplacement: { value: 0.03 },
+        uNoiseScale: { value: 1.0 },
+        uMotionTime: { value: 0 },
+        uSpikes: { value: 0.6 },
         uColor: { value: new THREE.Color(0x000055) },
         uOpacity: { value: 0.3 },
       },
@@ -307,6 +331,9 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
       uniforms: {
         uTime: { value: 0 },
         uDisplacement: { value: 0.03 },
+        uNoiseScale: { value: 1.0 },
+        uMotionTime: { value: 0 },
+        uSpikes: { value: 0.6 },
         uColor: { value: new THREE.Color(blobConfig?.midColor || BASE.shellColor) },
         uOpacity: { value: BASE.shellOpacity },
       },
@@ -324,6 +351,9 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
       uniforms: {
         uTime: { value: 0 },
         uDisplacement: { value: 0.03 },
+        uNoiseScale: { value: 1.0 },
+        uMotionTime: { value: 0 },
+        uSpikes: { value: 0.6 },
         uScale: { value: BASE.plasmaScale },
         uBrightness: { value: BASE.plasmaBrightness },
         uThreshold: { value: BASE.voidThreshold },
@@ -405,7 +435,8 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
         const numBins = Math.min(35, a.data.length);
         for (let i = 1; i < numBins; i++) sum += a.data[i];
         const avg = (sum / numBins) / 255;
-        const gain = blobConfig?.sensitivity !== undefined ? blobConfig.sensitivity : 5.5;
+        const liveConfig = blobConfigRef.current;
+        const gain = liveConfig?.sensitivity !== undefined ? liveConfig.sensitivity : 5.5;
         level = Math.min(1, avg * gain);
       }
 
@@ -429,27 +460,50 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
 
       // Serene ambient breathing
       const idle = Math.sin(t * 0.5) * 0.008 + Math.cos(t * 0.3) * 0.004;
-      const userScale = blobConfig?.scale || 1.0;
+      const liveConfig = blobConfigRef.current;
+      const userScale = liveConfig?.scale || 1.0;
+      const speed = liveConfig?.speed !== undefined ? liveConfig.speed : 13;
+      const spikes = liveConfig?.spikes !== undefined ? liveConfig.spikes : 0.6;
+      const processing = liveConfig?.processing !== undefined ? liveConfig.processing : 1.0;
+      const speedFactor = speed / 13;
+      const processingFactor = processing;
+      const spikesFactor = Math.max(0.4, spikes);
+      // Exact demo mapping:
+      // timeVar += timeDiff(ms) * 0.00005 * speedVal
+      // => timeVar ~= t(seconds) * 0.05 * speedVal
+      const motionTime = t * 0.05 * speed;
+      const motionSpikes = spikes * processing;
       mainGroup.scale.setScalar(userScale * (1 + idle + v * 0.35));
 
-      // Dynamic surface vertex noise displacement (creates liquid wavy edge contours on speech)
-      const displacement = 0.03 + v * 0.18;
-      shellFrontMat.uniforms.uTime.value = t;
+      // Dynamic surface vertex noise displacement (liquid contour style)
+      const displacement = (0.03 + v * 0.18) * processingFactor;
+      const animationTime = t * speedFactor;
+      shellFrontMat.uniforms.uTime.value = animationTime;
       shellFrontMat.uniforms.uDisplacement.value = displacement;
-      shellBackMat.uniforms.uTime.value = t;
-      shellBackMat.uniforms.uDisplacement.value = displacement;
+      shellFrontMat.uniforms.uNoiseScale.value = spikesFactor;
+      shellFrontMat.uniforms.uMotionTime.value = motionTime;
+      shellFrontMat.uniforms.uSpikes.value = motionSpikes;
+      shellBackMat.uniforms.uTime.value = animationTime;
+      shellBackMat.uniforms.uDisplacement.value = displacement * 1.1;
+      shellBackMat.uniforms.uNoiseScale.value = spikesFactor;
+      shellBackMat.uniforms.uMotionTime.value = motionTime;
+      shellBackMat.uniforms.uSpikes.value = motionSpikes;
 
-      plasmaMat.uniforms.uTime.value = t * (BASE.timeScale + v * 2.2);
+      plasmaMat.uniforms.uTime.value = animationTime * (BASE.timeScale + v * 2.2 * processingFactor);
       plasmaMat.uniforms.uDisplacement.value = displacement;
-      plasmaMat.uniforms.uBrightness.value = BASE.plasmaBrightness + v * 1.8;
-      plasmaMat.uniforms.uThreshold.value = Math.max(0.02, BASE.voidThreshold - v * 0.06);
+      plasmaMat.uniforms.uNoiseScale.value = spikesFactor;
+      plasmaMat.uniforms.uMotionTime.value = motionTime;
+      plasmaMat.uniforms.uSpikes.value = motionSpikes;
+      plasmaMat.uniforms.uScale.value = BASE.plasmaScale * spikesFactor;
+      plasmaMat.uniforms.uBrightness.value = BASE.plasmaBrightness + v * 1.8 * processingFactor;
+      plasmaMat.uniforms.uThreshold.value = Math.max(0.02, BASE.voidThreshold - v * 0.06 * processingFactor);
       shellFrontMat.uniforms.uOpacity.value = Math.min(1, BASE.shellOpacity + v * 0.4);
-      pointLight.intensity = 2.0 + v * 5.0;
-      pMat.uniforms.uTime.value = t * (1.0 + v * 1.5);
+      pointLight.intensity = 2.0 + v * 5.0 * processingFactor;
+      pMat.uniforms.uTime.value = animationTime * (1.0 + v * 1.5 * processingFactor);
 
-      plasmaMesh.rotation.y = t * (0.05 + v * 0.1);
-      mainGroup.rotation.x += BASE.rotationSpeedX * (1 + v * 2);
-      mainGroup.rotation.y += BASE.rotationSpeedY * (1 + v * 2);
+      plasmaMesh.rotation.y = animationTime * (0.05 + v * 0.1 * processingFactor);
+      mainGroup.rotation.x += BASE.rotationSpeedX * speedFactor * (1 + v * 2);
+      mainGroup.rotation.y += BASE.rotationSpeedY * speedFactor * (1 + v * 2);
 
       renderer.render(scene, camera);
     };
@@ -474,7 +528,7 @@ export default function VoiceReactiveOrb({ blobConfig, onPositionChange, isAiSpe
       pMat.dispose();
       renderer.dispose();
     };
-  }, [startMic, blobConfig?.scale]);
+  }, [startMic]);
 
   // Drag & Drop Handlers
   const handlePointerDown = (e) => {
